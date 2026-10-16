@@ -2,7 +2,6 @@ package br.pucgoias.ads.delivery;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.fail;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -17,6 +16,7 @@ import br.pucgoias.ads.delivery.dominio.Cliente;
 import br.pucgoias.ads.delivery.dominio.Endereco;
 import br.pucgoias.ads.delivery.dominio.FaturamentoRestaurante;
 import br.pucgoias.ads.delivery.dominio.ItemCardapio;
+import br.pucgoias.ads.delivery.dominio.ItemPedido;
 import br.pucgoias.ads.delivery.dominio.Pedido;
 import br.pucgoias.ads.delivery.dominio.Restaurante;
 import br.pucgoias.ads.delivery.dominio.StatusPedido;
@@ -101,36 +101,107 @@ class DeliveryServiceTest {
                 .extracting(Restaurante::getNome).containsExactly("Nonna Pasta");
     }
 
-    // ---------------- Casos a escrever pelo estudante (Etapa 5) ----------------
+    // ---------------- Casos escritos pelo estudante (Etapa 5) ----------------
 
     @Test
     @DisplayName("5. Item e incluido no cardapio; codigo repetido e rejeitado (R2)")
     void caso5_adicionarItem() {
-        fail("Caso 5 a implementar");
+        servico.adicionarItemCardapio(cerrado.getId(),
+                new ItemCardapio("PAO_QUEIJO", "Pao de queijo", new BigDecimal("8.00"), true));
+
+        Restaurante comItemNovo = servico.buscarRestaurante(cerrado.getId());
+        assertThat(comItemNovo.getCardapio()).hasSize(4);
+        assertThat(comItemNovo.buscarItem("PAO_QUEIJO").orElseThrow().preco())
+                .isEqualByComparingTo("8.00");
+
+        assertThatThrownBy(() -> servico.adicionarItemCardapio(cerrado.getId(),
+                new ItemCardapio("PAMONHA", "Pamonha doce", new BigDecimal("14.00"), true)))
+                .isInstanceOf(ItemDuplicadoException.class)
+                .hasMessageContaining("PAMONHA");
+
+        Restaurante semAlteracao = servico.buscarRestaurante(cerrado.getId());
+        assertThat(semAlteracao.getCardapio()).hasSize(4);
+        assertThat(semAlteracao.buscarItem("PAMONHA").orElseThrow().nome()).isEqualTo("Pamonha de sal");
+        assertThat(semAlteracao.buscarItem("PAMONHA").orElseThrow().preco()).isEqualByComparingTo("12.00");
     }
 
     @Test
     @DisplayName("6. Pedido copia nome e preco e calcula o total (R3)")
     void caso6_criarPedido() {
-        fail("Caso 6 a implementar");
+        Pedido criado = servico.criarPedido(cerrado.getId(), ana, List.of(
+                new ItemSolicitado("PAMONHA", 2),
+                new ItemSolicitado("EMPADAO", 1)));
+
+        Pedido lido = servico.buscarPedido(criado.getId());
+        assertThat(lido.getStatus()).isEqualTo(StatusPedido.RECEBIDO);
+        assertThat(lido.getTotal()).isEqualByComparingTo("49.50");
+        assertThat(lido.getItens())
+                .extracting(ItemPedido::nome)
+                .containsExactly("Pamonha de sal", "Empadao goiano");
+        assertThat(lido.getItens().get(0).precoUnitario()).isEqualByComparingTo("12.00");
+        assertThat(lido.getItens().get(1).precoUnitario()).isEqualByComparingTo("25.50");
     }
 
     @Test
     @DisplayName("7. Pedido vazio, item indisponivel ou inexistente sao rejeitados (R3)")
     void caso7_pedidoInvalido() {
-        fail("Caso 7 a implementar");
+        assertThatThrownBy(() -> servico.criarPedido(cerrado.getId(), ana, List.of()))
+                .isInstanceOf(PedidoInvalidoException.class);
+
+        assertThatThrownBy(() -> servico.criarPedido(cerrado.getId(), ana,
+                List.of(new ItemSolicitado("PAMONHA", 0))))
+                .isInstanceOf(PedidoInvalidoException.class);
+
+        assertThatThrownBy(() -> servico.criarPedido(cerrado.getId(), ana,
+                List.of(new ItemSolicitado("PEQUI", 1))))
+                .isInstanceOf(ItemIndisponivelException.class)
+                .hasMessageContaining("PEQUI");
+
+        assertThatThrownBy(() -> servico.criarPedido(cerrado.getId(), ana,
+                List.of(new ItemSolicitado("FEIJOADA", 1))))
+                .isInstanceOf(ItemIndisponivelException.class)
+                .hasMessageContaining("FEIJOADA");
+
+        assertThat(pedidoRepository.count()).isZero();
     }
 
     @Test
     @DisplayName("8. Alteracao de preco no cardapio nao afeta pedido existente (R4)")
     void caso8_snapshotDePreco() {
-        fail("Caso 8 a implementar");
+        Pedido pedido = servico.criarPedido(cerrado.getId(), ana,
+                List.of(new ItemSolicitado("PAMONHA", 2)));
+
+        servico.alterarPreco(cerrado.getId(), "PAMONHA", new BigDecimal("15.00"));
+
+        Restaurante restaurante = servico.buscarRestaurante(cerrado.getId());
+        assertThat(restaurante.buscarItem("PAMONHA").orElseThrow().preco()).isEqualByComparingTo("15.00");
+
+        Pedido lido = servico.buscarPedido(pedido.getId());
+        assertThat(lido.getTotal()).isEqualByComparingTo("24.00");
+        assertThat(lido.getItens().get(0).precoUnitario()).isEqualByComparingTo("12.00");
     }
 
     @Test
     @DisplayName("9. Transicoes de status respeitam o ciclo de vida (R6)")
     void caso9_transicoes() {
-        fail("Caso 9 a implementar");
+        Pedido pedido = servico.criarPedido(cerrado.getId(), ana,
+                List.of(new ItemSolicitado("EMPADAO", 1)));
+        String id = pedido.getId();
+
+        assertThat(servico.avancarStatus(id).getStatus()).isEqualTo(StatusPedido.EM_PREPARO);
+        assertThatThrownBy(() -> servico.cancelarPedido(id))
+                .isInstanceOf(TransicaoInvalidaException.class);
+
+        assertThat(servico.avancarStatus(id).getStatus()).isEqualTo(StatusPedido.SAIU_PARA_ENTREGA);
+        assertThat(servico.avancarStatus(id).getStatus()).isEqualTo(StatusPedido.ENTREGUE);
+        assertThatThrownBy(() -> servico.avancarStatus(id))
+                .isInstanceOf(TransicaoInvalidaException.class);
+
+        Pedido outro = servico.criarPedido(cerrado.getId(), ana,
+                List.of(new ItemSolicitado("PAMONHA", 1)));
+        assertThat(servico.cancelarPedido(outro.getId()).getStatus()).isEqualTo(StatusPedido.CANCELADO);
+        assertThatThrownBy(() -> servico.avancarStatus(outro.getId()))
+                .isInstanceOf(TransicaoInvalidaException.class);
     }
 
     // ---------------- Caso fornecido (agregacao) ----------------

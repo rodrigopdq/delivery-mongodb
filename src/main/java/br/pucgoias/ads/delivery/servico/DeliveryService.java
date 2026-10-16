@@ -52,7 +52,7 @@ public class DeliveryService {
     }
 
     // ---------------------------------------------------------------
-    // Operacoes fornecidas (referencia)
+    // Restaurante e cardapio
     // ---------------------------------------------------------------
 
     /** R1: o nome do restaurante e unico (garantido pelo indice unico). */
@@ -69,9 +69,22 @@ public class DeliveryService {
                 .orElseThrow(() -> new RecursoNaoEncontradoException("Restaurante", id));
     }
 
-    public Pedido buscarPedido(String id) {
-        return pedidoRepository.findById(id)
-                .orElseThrow(() -> new RecursoNaoEncontradoException("Pedido", id));
+    /**
+     * R2: inclui o item com UMA atualizacao atomica ($push),
+     * condicionada a inexistencia do codigo no cardapio ($ne).
+     */
+    public void adicionarItemCardapio(String restauranteId, ItemCardapio item) {
+        Query query = Query.query(Criteria.where("id").is(restauranteId)
+                .and("cardapio.codigo").ne(item.codigo()));
+        Update update = new Update().push("cardapio", item);
+        UpdateResult resultado = mongoTemplate.updateFirst(query, update, Restaurante.class);
+
+        if (resultado.getMatchedCount() == 0) {
+            if (!restauranteRepository.existsById(restauranteId)) {
+                throw new RecursoNaoEncontradoException("Restaurante", restauranteId);
+            }
+            throw new ItemDuplicadoException(item.codigo());
+        }
     }
 
     /**
@@ -89,44 +102,76 @@ public class DeliveryService {
     }
 
     // ---------------------------------------------------------------
-    // Operacoes a implementar (Etapa 4)
+    // Pedido
     // ---------------------------------------------------------------
 
-    /**
-     * R2: incluir o item no cardapio com UMA atualizacao atomica ($push),
-     * condicionada a inexistencia do codigo no array ($ne).
-     * Restaurante inexistente: RecursoNaoEncontradoException.
-     * Codigo repetido: ItemDuplicadoException.
-     */
-    public void adicionarItemCardapio(String restauranteId, ItemCardapio item) {
-        throw new UnsupportedOperationException("TODO: adicionarItemCardapio");
+    public Pedido buscarPedido(String id) {
+        return pedidoRepository.findById(id)
+                .orElseThrow(() -> new RecursoNaoEncontradoException("Pedido", id));
     }
 
     /**
-     * R3 e R4: rejeitar lista vazia ou quantidade nao positiva (PedidoInvalidoException);
-     * rejeitar item inexistente ou indisponivel (ItemIndisponivelException);
-     * copiar nome e preco vigentes do cardapio para cada ItemPedido.
+     * R3 e R4: valida a lista, le o restaurante uma unica vez e copia
+     * nome e preco vigentes do cardapio para cada ItemPedido.
      */
     public Pedido criarPedido(String restauranteId, Cliente cliente, List<ItemSolicitado> solicitados) {
-        throw new UnsupportedOperationException("TODO: criarPedido");
+        if (solicitados == null || solicitados.isEmpty()) {
+            throw new PedidoInvalidoException("o pedido deve conter ao menos um item");
+        }
+        Restaurante restaurante = buscarRestaurante(restauranteId);
+
+        List<ItemPedido> itens = solicitados.stream()
+                .map(solicitado -> converterItem(restaurante, solicitado))
+                .toList();
+
+        return pedidoRepository.save(new Pedido(restauranteId, cliente, itens));
     }
 
-    /** R6: avancar o pedido para o proximo status. */
+    /** R6: avanca o pedido para o proximo status. */
     public Pedido avancarStatus(String pedidoId) {
-        throw new UnsupportedOperationException("TODO: avancarStatus");
+        Pedido pedido = buscarPedido(pedidoId);
+        pedido.avancarStatus();
+        return pedidoRepository.save(pedido);
     }
 
-    /** R6: cancelar o pedido (somente no status RECEBIDO). */
+    /** R6: cancela o pedido (somente no status RECEBIDO). */
     public Pedido cancelarPedido(String pedidoId) {
-        throw new UnsupportedOperationException("TODO: cancelarPedido");
+        Pedido pedido = buscarPedido(pedidoId);
+        pedido.cancelar();
+        return pedidoRepository.save(pedido);
     }
 
     /**
-     * R7: pipeline de agregacao sobre "pedidos":
-     * $match (status ENTREGUE) -> $group (restauranteId: soma de total e contagem)
-     * -> $project (renomear _id para restauranteId) -> $sort (faturamento decrescente).
+     * R7: $match (ENTREGUE) -> $group (soma e contagem por restaurante)
+     * -> $project (renomeia _id) -> $sort (faturamento decrescente).
      */
     public List<FaturamentoRestaurante> faturamentoPorRestaurante() {
-        throw new UnsupportedOperationException("TODO: faturamentoPorRestaurante");
+        Aggregation agregacao = newAggregation(
+                match(Criteria.where("status").is(StatusPedido.ENTREGUE)),
+                group("restauranteId")
+                        .sum("total").as("faturamento")
+                        .count().as("quantidadePedidos"),
+                project("faturamento", "quantidadePedidos")
+                        .and("restauranteId").previousOperation(),
+                sort(Sort.by(Sort.Direction.DESC, "faturamento")));
+
+        return mongoTemplate.aggregate(agregacao, Pedido.class, FaturamentoRestaurante.class)
+                .getMappedResults();
+    }
+
+    // ---------------------------------------------------------------
+    // Auxiliares
+    // ---------------------------------------------------------------
+
+    private ItemPedido converterItem(Restaurante restaurante, ItemSolicitado solicitado) {
+        if (solicitado.quantidade() <= 0) {
+            throw new PedidoInvalidoException("quantidade deve ser positiva: " + solicitado.codigo());
+        }
+        ItemCardapio itemCardapio = restaurante.buscarItem(solicitado.codigo())
+                .filter(ItemCardapio::disponivel)
+                .orElseThrow(() -> new ItemIndisponivelException(solicitado.codigo()));
+
+        return new ItemPedido(itemCardapio.codigo(), itemCardapio.nome(),
+                itemCardapio.preco(), solicitado.quantidade());
     }
 }
