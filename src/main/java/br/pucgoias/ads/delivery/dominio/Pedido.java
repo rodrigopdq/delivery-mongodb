@@ -4,20 +4,26 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
+import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
+import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field;
+import org.springframework.data.mongodb.core.mapping.FieldType;
+
+import br.pucgoias.ads.delivery.excecao.TransicaoInvalidaException;
+
 /**
  * Raiz do agregado Pedido. O restaurante e referenciado pelo identificador;
  * cliente e itens sao incorporados.
- *
- * TODO (Etapa 2): mapear a classe para a colecao "pedidos":
- *   - identificador gerado pelo MongoDB;
- *   - indice simples em restauranteId;
- *   - total gravado como Decimal128;
- *   - campo de versao para controle otimista de concorrencia.
  */
+@Document(collection = "pedidos")
 public class Pedido {
 
+    @Id
     private String id;
 
+    @Indexed
     private String restauranteId;
 
     private Cliente cliente;
@@ -26,31 +32,37 @@ public class Pedido {
 
     private StatusPedido status;
 
+    @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal total;
 
     private Instant criadoEm;
 
+    @Version
     private Long versao;
 
     protected Pedido() {
     }
 
-    /** TODO (Etapa 2): status inicial RECEBIDO; total = soma dos subtotais. */
     public Pedido(String restauranteId, Cliente cliente, List<ItemPedido> itens) {
         this.restauranteId = restauranteId;
         this.cliente = cliente;
         this.itens = List.copyOf(itens);
+        this.status = StatusPedido.RECEBIDO;
+        this.total = this.itens.stream()
+                .map(ItemPedido::subtotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         this.criadoEm = Instant.now();
     }
 
-    /** TODO (Etapa 2): delegar ao StatusPedido. */
     public void avancarStatus() {
-        throw new UnsupportedOperationException("TODO: implementar Pedido.avancarStatus()");
+        this.status = status.proximo();
     }
 
-    /** TODO (Etapa 2): somente pedidos RECEBIDO podem ser cancelados. */
     public void cancelar() {
-        throw new UnsupportedOperationException("TODO: implementar Pedido.cancelar()");
+        if (!status.permiteCancelamento()) {
+            throw new TransicaoInvalidaException(status, "cancelar");
+        }
+        this.status = StatusPedido.CANCELADO;
     }
 
     public String getId() { return id; }

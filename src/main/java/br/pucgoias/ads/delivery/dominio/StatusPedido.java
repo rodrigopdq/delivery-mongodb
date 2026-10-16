@@ -10,12 +10,14 @@ public enum StatusPedido {
     ENTREGUE,
     CANCELADO;
 
-    /**
-     * TODO (Etapa 2): retornar o status seguinte conforme o diagrama de estados.
-     * ENTREGUE e CANCELADO sao estados finais: lancar TransicaoInvalidaException.
-     */
+    /** Retorna o status seguinte; ENTREGUE e CANCELADO sao estados finais. */
     public StatusPedido proximo() {
-        throw new UnsupportedOperationException("TODO: implementar StatusPedido.proximo()");
+        return switch (this) {
+            case RECEBIDO -> EM_PREPARO;
+            case EM_PREPARO -> SAIU_PARA_ENTREGA;
+            case SAIU_PARA_ENTREGA -> ENTREGUE;
+            case ENTREGUE, CANCELADO -> throw new TransicaoInvalidaException(this, "avancar");
+        };
     }
 
     public boolean permiteCancelamento() {
